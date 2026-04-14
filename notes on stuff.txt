@@ -1,0 +1,16 @@
+Image file sliding_theory_K8.jpg vs sliding_theory_K15.jpg
+What changed (this is about K = 8)
+Classic SMC now has a larger undershoot (~ -0.15 rad)
+Smooth SMC is more damped and controlled
+Classic SMC is more aggressive → drives state hard to the surface
+That aggressiveness causes:
+overshoot / undershoot
+faster initial convergence, but less “graceful”
+Smooth SMC gives better transient behavior
+Classic SMC gives harder, more abrupt correction
+Control Input (Bottom Plot)
+Still seeing:
+Thick red band = chattering
+Smooth signal = boundary layer working
+Red band is slightly more structured → your gain tuning likely changed
+Smooth controller shows clear sinusoidal-like effort tracking the disturbance
