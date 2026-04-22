@@ -45,7 +45,7 @@ for r = 1:2
     p_real = getParams();
     p_hat  = getParams();
 
-    unc = 0.20;
+    unc = 0.0;
 
     p_hat.m = p_real.m .* (1 + unc*[-1;1;-1;1;-1]);
     p_hat.I = p_real.I .* (1 + unc*[1;-1;1;-1;1]);
@@ -132,7 +132,7 @@ p_real = getParams();
 p_hat  = getParams();
 
 % Add uncertainty to controller model
-unc = 0.20;     % 0% uncertainty
+unc = 0.0;     % 0% uncertainty
 
 
 p_hat.m = p_real.m .* (1 + unc*[-1;1;-1;1;-1]);
@@ -648,28 +648,56 @@ end
 %%  PLOTS
 %% ===============================================================
 function plotResults(out, p)
-
     T = out.T;
     X = out.X;
     E = out.E;
-
     labels = {'\theta_1 (stance shin)', '\theta_2 (stance thigh)', ...
               '\theta_3 (torso)', '\theta_4 (swing thigh)', '\theta_5 (swing shin)'};
     colors  = lines(5);
+
+    %% -- Joint Tracking Error (NEW) --
+    figure('Name','Tracking Errors','NumberTitle','off');
+    hold on;
+    for i = 1:5
+        subplot(5,1,i);
+        % Calculate error for this joint over all time steps
+        q_actual = X(:,i);
+        q_desired = zeros(length(T),1);
+        for k = 1:length(T)
+            [qd_vec,~,~] = referenceGait(T(k), p);
+            q_desired(k) = qd_vec(i);
+        end
+        
+        plot(T, rad2deg(q_actual - q_desired), 'Color', colors(i,:), 'LineWidth', 1.5);
+        ylabel('Error (deg)', 'FontSize', 8);
+        grid on;
+        if i == 1, title('Joint Tracking Errors (q_{actual} - q_{desired})'); end
+        if i == 5, xlabel('Time (s)'); end
+        
+        % Mark impacts
+        for ts = out.step_t
+            xline(ts, 'k--', 'Alpha', 0.3);
+        end
+    end
 
     %% -- Joint angles --
     figure('Name','Joint Angles','NumberTitle','off');
     for i = 1:5
         subplot(5,1,i);
-        plot(T, rad2deg(X(:,i)), 'Color', colors(i,:), 'LineWidth', 1.5);
+        % Calculate desired for overlay
+        q_desired = zeros(length(T),1);
+        for k = 1:length(T)
+            [qd_vec,~,~] = referenceGait(T(k), p);
+            q_desired(k) = qd_vec(i);
+        end
+        
+        plot(T, rad2deg(X(:,i)), 'Color', colors(i,:), 'LineWidth', 1.5); hold on;
+        plot(T, rad2deg(q_desired), 'k:', 'LineWidth', 1.0); % Desired as dotted black
         ylabel(labels{i}, 'FontSize', 8);
         grid on;
-        if i == 1, title('Joint Angles (deg)'); end
+        if i == 1, title('Joint Angles: Solid (Actual) vs Dotted (Reference)'); end
         if i == 5, xlabel('Time (s)'); end
-        % mark heel strikes
-        for ts = out.step_t
-            xline(ts, 'k--', 'Alpha', 0.4);
-        end
+        for ts = out.step_t, xline(ts, 'k--', 'Alpha', 0.4); end
     end
 
     %% -- Joint velocities --
@@ -706,7 +734,7 @@ function plotResults(out, p)
         xline(ts, 'r--', 'LineWidth', 1, 'Label', 'impact');
     end
 
-    %% -- Swing foot height (verify clearance) --
+    %% -- Swing foot height --
     footY = zeros(length(T),1);
     for k = 1:length(T)
         pts    = forwardKinematics(out.X(k,1:5)', p);
@@ -721,13 +749,12 @@ function plotResults(out, p)
     grid on;
 end
 
-
 %% ===============================================================
 %%  ANIMATION  (camera tracks hip)
 %% ===============================================================
 function animateBiped(out, p)
 
-    gifName = 'biped_walk_20_ct.gif';   % output filename
+    gifName = 'biped_walk_0_ct.gif';   % output filename
 
     figure('Name','Biped Animation','NumberTitle','off', ...
            'Color','w', 'Position',[100 100 900 500]);
