@@ -17,11 +17,103 @@
 %           4=swing thigh,  5=swing shin
 %   Stance foot pinned to origin.
 %% ===============================================================
+clear; clc; close all;
+%% ===============================================================
 
 clear; clc; close all;
 
+controllers = {'ct','smc'};
+results = struct();
+
+for r = 1:2
+    
+    sim.controller = controllers{r};
+    sim.steps      = 5;
+    sim.TmaxStep   = 1.5;
+    sim.dt         = 0.002;
+
+    % CT gains
+    sim.Kp  = diag([80 80 80 80 80]);
+    sim.Kd  = diag([18 18 18 18 18]);
+
+    % SMC gains
+    sim.Lambda = 10 * eye(5);
+    sim.K_smc  = 25 * eye(5);
+    sim.phi    = 0.05;
+
+    % Parameters
+    p_real = getParams();
+    p_hat  = getParams();
+
+    unc = 0.20;
+
+    p_hat.m = p_real.m .* (1 + unc*[-1;1;-1;1;-1]);
+    p_hat.I = p_real.I .* (1 + unc*[1;-1;1;-1;1]);
+    p_hat.l = p_real.l .* (1 + 0.15*unc*[1;1;-1;-1;1]);
+
+    % Initial condition
+    q0  = deg2rad([-8; 18; 2; 25; -18]);
+    dq0 = deg2rad([ 5; -8; 0; -10; 6]);
+    x0  = [q0; dq0];
+
+    fprintf('\n=====================================================\n');
+    fprintf(' Running %s controller...\n', upper(sim.controller));
+    fprintf('=====================================================\n');
+
+    out = runHybridSim(x0,p_real,p_hat,sim);
+    
+    % ---- PERFORMANCE METRICS ----
+    metrics = evaluatePerformance(out,p_real);
+
+    results.(sim.controller) = metrics;
+
+    fprintf('\n%s RESULTS:\n', upper(sim.controller));
+    fprintf('Completed Steps       : %d\n', metrics.steps);
+    fprintf('Simulation Time       : %.3f sec\n', metrics.totalTime);
+    fprintf('RMS Tracking Error    : %.4f rad\n', metrics.rmsError);
+    fprintf('Max Tracking Error    : %.4f rad\n', metrics.maxError);
+    fprintf('Mean Energy           : %.2f J\n', metrics.meanEnergy);
+    fprintf('Energy Variation      : %.2f J\n', metrics.energySwing);
+end
+
+%% ===============================================================
+%  FINAL COMPARISON TABLE
+%% ===============================================================
+
+ct  = results.ct;
+smc = results.smc;
+
+fprintf('\n\n=====================================================\n');
+fprintf(' FINAL CONTROLLER COMPARISON\n');
+fprintf('=====================================================\n');
+
+fprintf('%-22s %-12s %-12s\n','Metric','CT','SMC');
+fprintf('-----------------------------------------------------\n');
+fprintf('%-22s %-12d %-12d\n','Completed Steps',ct.steps,smc.steps);
+fprintf('%-22s %-12.3f %-12.3f\n','Sim Time (s)',ct.totalTime,smc.totalTime);
+fprintf('%-22s %-12.4f %-12.4f\n','RMS Error',ct.rmsError,smc.rmsError);
+fprintf('%-22s %-12.4f %-12.4f\n','Max Error',ct.maxError,smc.maxError);
+fprintf('%-22s %-12.2f %-12.2f\n','Mean Energy',ct.meanEnergy,smc.meanEnergy);
+fprintf('%-22s %-12.2f %-12.2f\n','Energy Swing',ct.energySwing,smc.energySwing);
+
+fprintf('=====================================================\n');
+
+if smc.rmsError < ct.rmsError
+    fprintf('Winner (tracking): SMC\n');
+else
+    fprintf('Winner (tracking): CT\n');
+end
+
+if smc.energySwing < ct.energySwing
+    fprintf('Winner (energy smoothness): SMC\n');
+else
+    fprintf('Winner (energy smoothness): CT\n');
+end
+
+
+
 %% -------- SIMULATION SETTINGS --------
-sim.controller = 'smc';   % 'ct'  or  'smc'
+sim.controller = 'ct';   % 'ct'  or  'smc'
 sim.steps      = 5;
 sim.TmaxStep   = 1.5;     % max time allowed per step (s)
 sim.dt         = 0.002;   % for energy-monitor sampling only
@@ -36,8 +128,16 @@ sim.K_smc  = 25 * eye(5);   % robustness gain
 sim.phi    = 0.05;          % boundary-layer thickness (tanh saturation)
 
 %% -------- PARAMETERS --------
-p = getParams();
+p_real = getParams();
+p_hat  = getParams();
 
+% Add uncertainty to controller model
+unc = 0.20;     % 0% uncertainty
+
+
+p_hat.m = p_real.m .* (1 + unc*[-1;1;-1;1;-1]);
+p_hat.I = p_real.I .* (1 + unc*[1;-1;1;-1;1]);
+p_hat.l = p_real.l .* (1 + 0.15*unc*[1;1;-1;-1;1]);
 %% -------- INITIAL CONDITION --------
 % q = [stance-shin, stance-thigh, torso, swing-thigh, swing-shin]  (rad, absolute)
 q0  = deg2rad([-8; 18; 2; 25; -18]);
@@ -46,24 +146,23 @@ dq0 = deg2rad([ 5; -8;  0; -10;  6]);   % small non-zero seed velocities
 x0 = [q0; dq0];
 
 %% -------- RUN HYBRID SIMULATION --------
-out = runHybridSim(x0, p, sim);
-
+out = runHybridSim(x0, p_real, p_hat, sim);
 %% -------- PLOTS --------
-plotResults(out, p);
+plotResults(out, p_real);
 
 %% -------- ANIMATION --------
-animateBiped(out, p);
+animateBiped(out, p_real);
 
 
 %% ===============================================================
 %%  HYBRID SIMULATOR
 %% ===============================================================
-function out = runHybridSim(x0, p, sim)
+function out = runHybridSim(x0, p_real, p_hat, sim)
 
     T_all = [];
     X_all = [];
     E_all = [];
-    step_t = [];   % time of each heel-strike
+    step_t = [];
 
     x       = x0;
     tGlobal = 0;
@@ -71,86 +170,99 @@ function out = runHybridSim(x0, p, sim)
     for k = 1:sim.steps
 
         opts = odeset( ...
-            'RelTol', 1e-7, ...
-            'AbsTol', 1e-9, ...
-            'Events', @(t,x) heelStrikeEvent(t, x, p));
+            'RelTol',1e-7, ...
+            'AbsTol',1e-9, ...
+            'Events', @(t,x) heelStrikeEvent(t,x,p_real));
 
-        [tSol, xSol, te, ~, ~] = ode45( ...
-            @(t,x) swingPhaseDynamics(t, x, p, sim), ...
-            [0, sim.TmaxStep], x, opts);
+        [tSol,xSol,te,~,~] = ode45( ...
+            @(t,x) swingPhaseDynamics(t,x,p_real,p_hat,sim), ...
+            [0 sim.TmaxStep], x, opts);
 
-        % Energy along this segment
-        E = zeros(size(tSol));
+        % energy uses REAL robot
+        E = zeros(length(tSol),1);
         for i = 1:length(tSol)
-            E(i) = totalEnergy(xSol(i,:)', p);
+            E(i) = totalEnergy(xSol(i,:)', p_real);
         end
 
-        T_all = [T_all;  tSol + tGlobal];   %#ok<AGROW>
-        X_all = [X_all;  xSol];             %#ok<AGROW>
-        E_all = [E_all;  E];                %#ok<AGROW>
+        T_all = [T_all; tSol + tGlobal];
+        X_all = [X_all; xSol];
+        E_all = [E_all; E];
 
         if isempty(te)
-            warning('Step %d: heel-strike not detected within TmaxStep.', k);
+            warning('Step %d: heel strike not detected.',k);
             break
         end
 
-        step_t(end+1) = te(1) + tGlobal;   %#ok<AGROW>
-        tGlobal       = T_all(end);
+        step_t(end+1) = te(1) + tGlobal;
+        tGlobal = T_all(end);
 
-        xMinus = xSol(end, :)';
-        x      = impactMap(xMinus, p);      % momentum-based impact
+        xMinus = xSol(end,:)';
+
+        % impact uses REAL robot
+        x = impactMap(xMinus, p_real);
     end
 
-    out.T      = T_all;
-    out.X      = X_all;
-    out.E      = E_all;
+    out.T = T_all;
+    out.X = X_all;
+    out.E = E_all;
     out.step_t = step_t;
 end
 
 
+
 %% ===============================================================
-%%  SWING-PHASE ODE  (pinned stance foot)
-%% ===============================================================
-function dx = swingPhaseDynamics(t, x, p, sim)
+%  SWING-PHASE ODE  (pinned stance foot)
+% ===============================================================
+function dx = swingPhaseDynamics(t,x,p_real,p_hat,sim)
 
     q  = x(1:5);
     dq = x(6:10);
 
-    [D, C, G] = robotDynamics(q, dq, p);
+    % Real robot
+    [Dreal,Creal,Greal] = robotDynamics(q,dq,p_real);
 
-    % --- reference trajectory ---
-    [qd, dqd, ddqd] = referenceGait(t, p);
+    % Estimated model used by controller
+    [Dhat,Chat,Ghat] = robotDynamics(q,dq,p_hat);
+
+    % reference gait
+    [qd,dqd,ddqd] = referenceGait(t,p_real);
 
     e  = q  - qd;
     de = dq - dqd;
 
     switch lower(sim.controller)
 
-        case 'ct'   % Computed-Torque (feedback linearisation)
-            v   = ddqd - sim.Kd*de - sim.Kp*e;
-            tau = D*v + C*dq + G;
+        case 'ct'
 
-        case 'smc'  % Sliding-Mode Control  (Tzafestas 1996, §4)
-            s   = de + sim.Lambda * e;
-            % equivalent control + robustness term
-            v   = ddqd - sim.Lambda*de - sim.K_smc * tanh(s / sim.phi);
-            tau = D*v + C*dq + G;
+            v = ddqd - sim.Kd*de - sim.Kp*e;
+            tau = Dhat*v + Chat*dq + Ghat;
+
+        case 'smc'
+
+            s = de + sim.Lambda*e;
+
+            v = ddqd ...
+              - sim.Lambda*de ...
+              - sim.K_smc*tanh(s/sim.phi);
+
+            tau = Dhat*v + Chat*dq + Ghat;
 
         otherwise
-            error('Unknown controller: %s', sim.controller);
+            error('Unknown controller');
+
     end
 
-    ddq = D \ (tau - C*dq - G);
+    % REAL plant motion
+    ddq = Dreal \ (tau - Creal*dq - Greal);
 
     dx = [dq; ddq];
 end
 
-
 %% ===============================================================
-%%  HEEL-STRIKE EVENT
-%%  Triggers when swing foot y-coordinate crosses zero (descending)
-%%  AND swing foot is ahead of stance foot (positive x-direction).
-%% ===============================================================
+%  HEEL-STRIKE EVENT
+%  Triggers when swing foot y-coordinate crosses zero (descending)
+%  AND swing foot is ahead of stance foot (positive x-direction).
+% ===============================================================
 function [value, isterminal, direction] = heelStrikeEvent(~, x, p)
 
     q   = x(1:5);
@@ -172,21 +284,21 @@ end
 
 
 %% ===============================================================
-%%  IMPACT MAP  (Hurmuzlu & Marghitu 1994 / Grizzle et al.)
-%%
-%%  Assumptions
-%%   - Perfectly plastic impact (new stance foot does not rebound)
-%%   - Old stance foot lifts off instantaneously
-%%   - Torso and upper-body angular momentum preserved through impact
-%%
-%%  Equations
-%%   D(q) * dq+ = D(q) * dq-  +  Jc(q)' * F_imp
-%%   Jc(q) * dq+ = 0          (new stance foot velocity = 0)
-%%
-%%  This gives:
-%%   [D   -Jc'] [dq+  ]   [D*dq-]
-%%   [Jc   0  ] [F_imp] = [0    ]
-%% ===============================================================
+%  IMPACT MAP  (Hurmuzlu & Marghitu 1994 / Grizzle et al.)
+%
+%  Assumptions
+%   - Perfectly plastic impact (new stance foot does not rebound)
+%   - Old stance foot lifts off instantaneously
+%   - Torso and upper-body angular momentum preserved through impact
+%
+%  Equations
+%   D(q) * dq+ = D(q) * dq-  +  Jc(q)' * F_imp
+%   Jc(q) * dq+ = 0          (new stance foot velocity = 0)
+%
+%  This gives:
+%   [D   -Jc'] [dq+  ]   [D*dq-]
+%   [Jc   0  ] [F_imp] = [0    ]
+% ===============================================================
 function xPlus = impactMap(xMinus, p)
 
     q   = xMinus(1:5);
@@ -218,14 +330,14 @@ end
 
 
 %% ===============================================================
-%%  FORWARD KINEMATICS
-%%  Consistent absolute-angle convention; stance foot pinned at origin.
-%%  Positive angles = CCW from vertical.
-%%
-%%  Link layout (proximal → distal):
-%%   Foot → knee1 → hip → (torso tip)
-%%                  hip → knee2 → swing foot
-%% ===============================================================
+%  FORWARD KINEMATICS
+%  Consistent absolute-angle convention; stance foot pinned at origin.
+%  Positive angles = CCW from vertical.
+%
+%  Link layout (proximal → distal):
+%   Foot → knee1 → hip → (torso tip)
+%                  hip → knee2 → swing foot
+% ===============================================================
 function pts = forwardKinematics(q, p)
 
     l = p.l;
@@ -259,10 +371,10 @@ end
 
 
 %% ===============================================================
-%%  SWING-FOOT JACOBIAN  (2×5)
-%%  Partial derivatives of swing foot position w.r.t. each joint angle.
-%%  Used in the impact map constraint.
-%% ===============================================================
+%  SWING-FOOT JACOBIAN  (2×5)
+%  Partial derivatives of swing foot position w.r.t. each joint angle.
+%  Used in the impact map constraint.
+% ===============================================================
 function Jc = swingFootJacobian(q, p)
 
     l = p.l;
@@ -285,18 +397,18 @@ end
 
 
 %% ===============================================================
-%%  LAGRANGIAN ROBOT DYNAMICS  D(q)*ddq + C(q,dq)*dq + G(q) = tau
-%%
-%%  Derived via Euler-Lagrange with absolute joint angles.
-%%  Centre of mass of each link at its midpoint.
-%%
-%%  Link CoM positions (absolute coordinates):
-%%   r1 = 0.5*l1*[sin(q1); cos(q1)]
-%%   r2 = l1*[sin(q1);cos(q1)] + 0.5*l2*[sin(q2);cos(q2)]
-%%   r3 = l1*[s1;c1] + l2*[s2;c2] + 0.5*l3*[s3;c3]
-%%   r4 = l1*[s1;c1] + l2*[s2;c2] + 0.5*l4*[s4;-c4]
-%%   r5 = l1*[s1;c1] + l2*[s2;c2] + l4*[s4;-c4] + 0.5*l5*[s5;-c5]
-%% ===============================================================
+%  LAGRANGIAN ROBOT DYNAMICS  D(q)*ddq + C(q,dq)*dq + G(q) = tau
+%
+%  Derived via Euler-Lagrange with absolute joint angles.
+%  Centre of mass of each link at its midpoint.
+%
+%  Link CoM positions (absolute coordinates):
+%   r1 = 0.5*l1*[sin(q1); cos(q1)]
+%   r2 = l1*[sin(q1);cos(q1)] + 0.5*l2*[sin(q2);cos(q2)]
+%   r3 = l1*[s1;c1] + l2*[s2;c2] + 0.5*l3*[s3;c3]
+%   r4 = l1*[s1;c1] + l2*[s2;c2] + 0.5*l4*[s4;-c4]
+%   r5 = l1*[s1;c1] + l2*[s2;c2] + l4*[s4;-c4] + 0.5*l5*[s5;-c5]
+% ===============================================================
 function [D, C, G] = robotDynamics(q, dq, p)
 
     m = p.m;   % 5×1 link masses
@@ -615,55 +727,108 @@ end
 %% ===============================================================
 function animateBiped(out, p)
 
+    gifName = 'biped_walk_20_ct.gif';   % output filename
+
     figure('Name','Biped Animation','NumberTitle','off', ...
            'Color','w', 'Position',[100 100 900 500]);
 
     ax = axes;
-    axis(ax, 'equal');
-    grid(ax, 'on');
-    ylim(ax, [-0.15 1.6]);
+    axis(ax,'equal');
+    grid(ax,'on');
+    ylim(ax,[-0.15 1.6]);
+
+    firstFrame = true;
 
     for k = 1:6:length(out.T)
 
-        q   = out.X(k, 1:5)';
-        pts = forwardKinematics(q, p);
+        q   = out.X(k,1:5)';
+        pts = forwardKinematics(q,p);
 
         hipX = pts.hip(1);
 
-        % Camera tracks hip
-        xlim(ax, [hipX - 1.0,  hipX + 1.0]);
+        xlim(ax,[hipX-1.0 hipX+1.0]);
 
         cla(ax); hold(ax,'on');
 
-        % Ground line
-        plot(ax, [hipX-2, hipX+2], [0 0], 'k-', 'LineWidth', 2);
+        % Ground
+        plot(ax,[hipX-2 hipX+2],[0 0],'k-','LineWidth',2);
 
-        % Stance leg  (blue)
-        drawSegment(ax, pts.stanceFoot, pts.knee1,  [0.15 0.35 0.75]);
-        drawSegment(ax, pts.knee1,      pts.hip,    [0.15 0.35 0.75]);
+        % Stance leg
+        drawSegment(ax,pts.stanceFoot,pts.knee1,[0.15 0.35 0.75]);
+        drawSegment(ax,pts.knee1,pts.hip,[0.15 0.35 0.75]);
 
-        % Torso  (dark red)
-        drawSegment(ax, pts.hip,   pts.torso,  [0.70 0.10 0.10]);
+        % Torso
+        drawSegment(ax,pts.hip,pts.torso,[0.70 0.10 0.10]);
 
-        % Swing leg  (green)
-        drawSegment(ax, pts.hip,   pts.knee2,  [0.10 0.60 0.20]);
-        drawSegment(ax, pts.knee2, pts.swingFoot, [0.10 0.60 0.20]);
+        % Swing leg
+        drawSegment(ax,pts.hip,pts.knee2,[0.10 0.60 0.20]);
+        drawSegment(ax,pts.knee2,pts.swingFoot,[0.10 0.60 0.20]);
 
-        % Joints as circles
-        jpts = [pts.stanceFoot, pts.knee1, pts.hip, pts.torso, ...
-                pts.knee2, pts.swingFoot];
-        plot(ax, jpts(1,:), jpts(2,:), 'o', ...
-             'MarkerSize', 6, 'MarkerFaceColor', 'k', 'MarkerEdgeColor','k');
+        % Joints
+        jpts = [pts.stanceFoot pts.knee1 pts.hip pts.torso ...
+                pts.knee2 pts.swingFoot];
 
-        title(ax, sprintf('t = %.3f s    step %d', out.T(k), ...
-              sum(out.step_t <= out.T(k))+1), 'FontSize', 11);
+        plot(ax,jpts(1,:),jpts(2,:),'o', ...
+            'MarkerSize',6, ...
+            'MarkerFaceColor','k', ...
+            'MarkerEdgeColor','k');
 
-        drawnow limitrate;
+        title(ax,sprintf('t = %.3f s   step %d', ...
+            out.T(k),sum(out.step_t <= out.T(k))+1));
+
+        drawnow;
+
+        % ===== CAPTURE FRAME =====
+        frame = getframe(gcf);
+        im = frame2im(frame);
+        [A,map] = rgb2ind(im,256);
+
+        if firstFrame
+            imwrite(A,map,gifName,'gif', ...
+                'LoopCount',Inf, ...
+                'DelayTime',0.03);
+            firstFrame = false;
+        else
+            imwrite(A,map,gifName,'gif', ...
+                'WriteMode','append', ...
+                'DelayTime',0.03);
+        end
+
         pause(0.018);
     end
+
+    fprintf('GIF saved as %s\n', gifName);
+
 end
 
 function drawSegment(ax, a, b, col)
     plot(ax, [a(1) b(1)], [a(2) b(2)], '-', ...
          'Color', col, 'LineWidth', 3.5);
+end
+
+%% ===============================================================
+% ADD THIS FUNCTION AT BOTTOM OF FILE
+%% ===============================================================
+function metrics = evaluatePerformance(out,p)
+
+T = out.T;
+X = out.X;
+E = out.E;
+
+N = length(T);
+err = zeros(N,1);
+
+for i = 1:N
+    [qd,~,~] = referenceGait(T(i),p);
+    e = X(i,1:5)' - qd;
+    err(i) = norm(e);
+end
+
+metrics.steps       = length(out.step_t);
+metrics.totalTime   = T(end);
+metrics.rmsError    = sqrt(mean(err.^2));
+metrics.maxError    = max(err);
+metrics.meanEnergy  = mean(E);
+metrics.energySwing = max(E)-min(E);
+
 end
