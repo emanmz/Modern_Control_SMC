@@ -153,10 +153,7 @@ This project implements ideas from:
 - Slotine & Li — Applied Nonlinear Control (SMC theory)
 - Ijspeert (2008) — Central Pattern Generators for locomotion control
 
-The CPG-SMC hybrid is motivated by biological motor control: spinal cord CPGs generate rhythmic locomotion patterns while descending cortical signals modulate amplitude and phase. Here, the CPG output modulates both the reference trajectory and the SMC switching gain, resulting in smoother, more adaptive gait.
+The CPG-SMC hybrid is motivated by biological motor control: spinal cord CPGs generate rhythmic locomotion patterns while descending cortical signals modulate amplitude and phase. Here, the CPG output modulates both the reference trajectory and the SMC switching gain, resulting in a smoother, more adaptive gait.
 
 ---
 
-## 📝 License
-
-MIT License — free to use, modify, and distribute with attribution.
