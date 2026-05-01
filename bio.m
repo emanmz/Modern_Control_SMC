@@ -37,6 +37,7 @@ end
 % Outputs
 printComparisonTable(metrics_data);
 plotAnalysis(sim_results, p);
+plotBioInspiredFigures(sim_results, p);
 animateComparison(sim_results, p);
 
 %% ===============================================================
@@ -224,4 +225,132 @@ function printComparisonTable(res)
     fprintf('%-15s %-10d %-10d %-10d\n', 'Steps', res.ct.steps, res.smc.steps, res.cpg_smc.steps);
     fprintf('%-15s %-10.4f %-10.4f %-10.4f\n', 'RMS Err', res.ct.rmsError, res.smc.rmsError, res.cpg_smc.rmsError);
     fprintf('%-15s %-10.2f %-10.2f %-10.2f\n', 'Energy', res.ct.meanEnergy, res.smc.meanEnergy, res.cpg_smc.meanEnergy);
+end
+function plotBioInspiredFigures(results, p)
+
+col_ct  = [0.00 0.45 0.70];
+col_smc = [0.84 0.37 0.00];
+col_cpg = [0.20 0.60 0.20];
+
+titles = {'CT','SMC','CPG-SMC'};
+
+%% ============================================================
+% VIII.A — CPG OSCILLATOR (PHASE PORTRAIT)
+%% ============================================================
+fig1 = figure('Color','w','Position',[100 100 600 400]);
+
+cpg = results{3}; % CPG-SMC
+u = cpg.X(:,11); v = cpg.X(:,16);
+
+plot(u, v, 'Color', col_cpg, 'LineWidth',1.5); hold on;
+plot(u(1), v(1), 'ko','MarkerFaceColor','k');
+xlabel('u (Excitation)');
+ylabel('v (Inhibition)');
+title('CPG Oscillator Phase Portrait');
+grid on; axis equal;
+
+exportgraphics(fig1,'fig_cpg_phase.png','Resolution',300);
+
+
+%% ============================================================
+% VIII.B — CPG-SMC STRUCTURE (SIGNAL FLOW PROXY)
+%% ============================================================
+fig2 = figure('Color','w','Position',[100 100 600 400]);
+
+t = cpg.T;
+q = cpg.X(:,1);
+u = cpg.X(:,11);
+
+plot(t, rad2deg(q),'k','LineWidth',1.5); hold on;
+plot(t, 20*u,'Color',col_cpg,'LineWidth',1.2);
+
+xlabel('Time (s)');
+ylabel('Signal');
+legend({'Joint Angle \theta_1','CPG Output (scaled)'},'Location','best');
+title('CPG-SMC Interaction (Neural Modulation of Motion)');
+grid on;
+
+exportgraphics(fig2,'fig_cpg_smc_interaction.png','Resolution',300);
+
+
+%% ============================================================
+% VIII.C — FLUID SWING PHASE (GAIT TRAJECTORY)
+%% ============================================================
+fig3 = figure('Color','w','Position',[100 100 600 400]);
+
+hold on;
+for r = 1:3
+    X = results{r}.X;
+    T = results{r}.T;
+
+    hip_traj = zeros(length(T),2);
+
+    for i=1:length(T)
+        pts = forwardKinematics(X(i,1:5)', p);
+        hip_traj(i,:) = pts.hip';
+    end
+
+    if r==1, col=col_ct;
+    elseif r==2, col=col_smc;
+    else, col=col_cpg; end
+
+    plot(hip_traj(:,1), hip_traj(:,2),'Color',col,'LineWidth',1.5);
+end
+
+xlabel('Forward Position (m)');
+ylabel('Vertical Position (m)');
+title('Hip Trajectory (Swing Phase Smoothness)');
+legend(titles,'Location','best');
+grid on; axis equal;
+
+exportgraphics(fig3,'fig_gait_trajectory.png','Resolution',300);
+
+
+%% ============================================================
+% IX — ENTRAINMENT / SYNCHRONIZATION
+%% ============================================================
+fig4 = figure('Color','w','Position',[100 100 650 450]);
+
+% Compare phase between joint and CPG
+theta = results{3}.X(:,1);
+u = results{3}.X(:,11);
+
+theta_norm = (theta - mean(theta))/std(theta);
+u_norm     = (u - mean(u))/std(u);
+
+plot(results{3}.T, theta_norm,'k','LineWidth',1.5); hold on;
+plot(results{3}.T, u_norm,'Color',col_cpg,'LineWidth',1.5);
+
+xlabel('Time (s)');
+ylabel('Normalized Amplitude');
+legend({'Joint Motion','CPG Output'},'Location','best');
+title('Neural Entrainment (Phase Synchronization)');
+grid on;
+
+exportgraphics(fig4,'fig_entrainment.png','Resolution',300);
+
+
+%% ============================================================
+% BONUS — TORQUE SMOOTHNESS COMPARISON (VERY USEFUL FOR PAPER)
+%% ============================================================
+fig5 = figure('Color','w','Position',[100 100 650 450]);
+
+for r = 1:3
+    tau = vecnorm(results{r}.U,2,2);
+
+    if r==1, col=col_ct;
+    elseif r==2, col=col_smc;
+    else, col=col_cpg; end
+
+    plot(results{r}.T, tau,'Color',col,'LineWidth',1.3); hold on;
+end
+
+xlabel('Time (s)');
+ylabel('||\tau||');
+title('Control Effort Comparison (Smoothness vs Robustness)');
+legend(titles,'Location','best');
+grid on;
+
+exportgraphics(fig5,'fig_control_comparison.png','Resolution',300);
+
 end
